@@ -190,8 +190,10 @@ jobs:
         echo "✓ Feeds 更新安装完成"
         
         # 显示 feeds 状态
-        ./scripts/feeds list | head -20
-        echo "... (共 $(./scripts/feeds list | wc -l) 个包)"
+        FEEDS_LIST_FILE="/tmp/openwrt-feeds-list.txt"
+        ./scripts/feeds list > "$FEEDS_LIST_FILE"
+        head -20 "$FEEDS_LIST_FILE"
+        echo "... (共 $(wc -l < "$FEEDS_LIST_FILE") 个包)"
     
     - name: Apply config
       run: |
