@@ -68,12 +68,47 @@ jobs:
           echo "Patch failed: old line still present after replacement."
           exit 1
         fi
+        echo "DTS patched: $DTS_FILE"
+        cat "$DTS_FILE" | grep -E 'reg = <0x5c0000 0x[0-9a-fA-F]+>;'
 
     - name: Update feeds
       run: |
+        set -euo pipefail
         cd openwrt
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+
+        retry() {
+          local -r max_attempts="$1"; shift
+          local attempt=1
+          local delay=5
+          until "$@"; do
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              return 1
+            fi
+            echo "Command failed (attempt $attempt/$max_attempts). Retrying in ${delay}s..."
+            sleep "$delay"
+            attempt=$((attempt + 1))
+            delay=$((delay * 2))
+          done
+        }
+
+        echo "Updating feeds (primary: git.openwrt.org)"
+        if ! retry 3 ./scripts/feeds update -a; then
+          echo "Primary feed servers failing (likely HTTP 503). Switching feeds to GitHub mirrors and retrying."
+
+          cp -f feeds.conf.default feeds.conf.default.bak
+
+          sed -i \
+            -e 's#https://git.openwrt.org/feed/packages.git#https://github.com/openwrt/packages.git#g' \
+            -e 's#https://git.openwrt.org/project/luci.git#https://github.com/openwrt/luci.git#g' \
+            -e 's#https://git.openwrt.org/feed/routing.git#https://github.com/openwrt/routing.git#g' \
+            -e 's#https://git.openwrt.org/feed/telephony.git#https://github.com/openwrt/telephony.git#g' \
+            feeds.conf.default
+
+          rm -rf feeds/packages feeds/luci feeds/routing feeds/telephony
+          retry 3 ./scripts/feeds update -a
+        fi
+
+        retry 3 ./scripts/feeds install -a
 
     - name: Apply config
       run: |
