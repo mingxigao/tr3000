@@ -217,6 +217,7 @@ jobs:
     
     - name: Download sources
       run: |
+        set -euo pipefail
         cd openwrt
         echo "下载源代码..."
         
@@ -229,7 +230,9 @@ jobs:
         retry_download() {
           local attempt=1
           while [ $attempt -le 3 ]; do
-            if make download -j$(nproc) 2>&1 | tee download.log; then
+            make download -j"$(nproc)" 2>&1 | tee download.log
+            status=${PIPESTATUS[0]}
+            if [ "$status" -eq 0 ]; then
               echo "✓ 源代码下载成功"
               return 0
             fi
@@ -242,10 +245,7 @@ jobs:
         
         retry_download
         
-        # 检查下载是否完整
-        if [ -f "scripts/download.pl" ]; then
-          ./scripts/download.pl check
-        fi
+        # 备注：OpenWrt 的 scripts/download.pl 没有 `check` 子命令；完整性校验由 `make download` 过程本身完成。
     
     - name: Build firmware
       run: |
