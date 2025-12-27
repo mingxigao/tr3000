@@ -2,138 +2,354 @@ name: OpenWrt 24.10.5 – TR3000 v1 DTS 112M UBI
 
 on:
   workflow_dispatch:
+    inputs:
+      openwrt_version:
+        description: 'OpenWrt git ref to checkout (tag/branch/commit), e.g. v24.10.5'
+        required: true
+        default: 'v24.10.5'
+      clean_build:
+        description: 'Force clean build (ignore cache)'
+        required: false
+        default: 'false'
+        type: boolean
   push:
     branches: [ main ]
+  schedule:
+    # 每周日凌晨2点自动构建（可选）
+    - cron: '0 2 * * 0'
 
 jobs:
   build:
+    timeout-minutes: 360  # 6小时超时
     runs-on: ubuntu-22.04
-
+    env:
+      OPENWRT_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.openwrt_version || 'v24.10.5' }}
+      CLEAN_BUILD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.clean_build || false }}
+    
     steps:
     - name: Checkout repo
       uses: actions/checkout@v4
-
+      with:
+        path: 'config-repo'  # 分离配置和源码目录
+    
     - name: Free disk space
       run: |
+        echo "清理磁盘空间..."
         sudo rm -rf /usr/share/dotnet
         sudo rm -rf /opt/ghc
         sudo rm -rf /usr/local/lib/android
-
+        sudo rm -rf /usr/local/lib/node_modules
+        sudo apt clean
+        df -h
+    
     - name: Install dependencies
       run: |
+        echo "安装编译依赖..."
         sudo apt update
         sudo apt install -y \
           build-essential clang flex bison g++ gawk gcc-multilib \
           gettext git libncurses-dev libssl-dev python3-setuptools \
-          rsync unzip zlib1g-dev file wget
-
+          rsync unzip zlib1g-dev file wget python3-distutils \
+          subversion quilt
+        echo "依赖安装完成"
+    
     - name: Clone OpenWrt
       run: |
-        git clone https://github.com/openwrt/openwrt.git
+        echo "克隆 OpenWrt 源码 ($OPENWRT_VERSION)..."
+        # 使用浅克隆加速
+        git clone --depth 1 --branch "$OPENWRT_VERSION" https://github.com/openwrt/openwrt.git
         cd openwrt
-        git checkout v24.10.5
-
+        # 如果是标签，获取完整历史以便打补丁
+        if git describe --tags --exact-match "$OPENWRT_VERSION" 2>/dev/null; then
+          echo "检测到标签版本，获取完整提交历史..."
+          git fetch --unshallow
+        fi
+        echo "源码克隆完成"
+    
+    - name: Cache feeds and dl
+      id: cache-feeds
+      uses: actions/cache@v4
+      with:
+        path: |
+          openwrt/feeds
+          openwrt/dl
+        # 关键修复：在key中加入源文件哈希，避免源切换时的缓存混淆
+        key: ${{ runner.os }}-openwrt-${{ env.OPENWRT_VERSION }}-${{ env.CLEAN_BUILD == 'true' && 'clean' || hashFiles('config-repo/config/tr3000-v1.config', 'openwrt/feeds.conf.default') }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-${{ env.OPENWRT_VERSION }}-
+        # 缓存控制
+        enableCrossOsArchive: false
+    
     - name: Apply DTS patch (safe edit)
       run: |
         set -euo pipefail
         cd openwrt
-
+        
         DTS_FILE="target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1.dts"
         OLD_LINE='reg = <0x5c0000 0x4000000>;'
-        NEW_LINE='reg = reg = <0x5c0000 0x7000000>;'
-
+        # 关键修复：修正重复的 "reg ="
+        NEW_LINE='reg = <0x5c0000 0x7000000>;'
+        
+        echo "检查并应用 DTS 补丁..."
         test -f "$DTS_FILE"
-
+        
+        # 检查是否已打补丁
         if grep -qF "$NEW_LINE" "$DTS_FILE"; then
-          echo "DTS already patched: $DTS_FILE"
+          echo "✓ DTS 已正确打补丁: $DTS_FILE"
           exit 0
         fi
-
+        
+        # 验证原行存在且唯一
         COUNT_OLD=$(grep -cF "$OLD_LINE" "$DTS_FILE" || true)
         if [ "$COUNT_OLD" -ne 1 ]; then
-          echo "Expected exactly 1 occurrence of: $OLD_LINE"
-          echo "Found: $COUNT_OLD"
-          echo "Refusing to patch (upstream DTS likely changed)."
+          echo "错误: 期望找到1处: $OLD_LINE"
+          echo "实际找到: $COUNT_OLD 处"
+          echo "拒绝打补丁 (上游 DTS 可能已变更)。"
           exit 1
         fi
-
+        
+        # 创建备份并应用补丁
+        cp "$DTS_FILE" "${DTS_FILE}.bak"
         sed -i "s|$OLD_LINE|$NEW_LINE|" "$DTS_FILE"
-
+        
+        # 验证补丁结果
         if ! grep -qF "$NEW_LINE" "$DTS_FILE"; then
-          echo "Patch failed: new line not found after replacement."
+          echo "错误: 补丁失败 - 新行未找到"
           exit 1
         fi
-
+        
         if grep -qF "$OLD_LINE" "$DTS_FILE"; then
-          echo "Patch failed: old line still present after replacement."
+          echo "错误: 补丁失败 - 旧行仍然存在"
           exit 1
         fi
-        echo "DTS patched: $DTS_FILE"
-        cat "$DTS_FILE" | grep -E 'reg = <0x5c0000 0x[0-9a-fA-F]+>;'
-
+        
+        echo "✓ DTS 补丁应用成功: $DTS_FILE"
+        echo "修改内容:"
+        grep -E 'reg = <0x5c0000 0x[0-9a-fA-F]+>;' "$DTS_FILE"
+    
     - name: Update feeds
       run: |
         set -euo pipefail
         cd openwrt
-
+        
+        # 备份原始配置
+        cp -f feeds.conf.default feeds.conf.default.bak
+        
+        # 增强的重试函数（指数退避）
         retry() {
-          local -r max_attempts="$1"; shift
+          local -r max_attempts="$1"
           local attempt=1
-          local delay=5
+          local delay=10
+          local last_exit_code=0
+          
+          shift
+          
           until "$@"; do
+            last_exit_code=$?
             if [ "$attempt" -ge "$max_attempts" ]; then
-              return 1
+              echo "错误: 命令在 $max_attempts 次尝试后仍失败"
+              return $last_exit_code
             fi
-            echo "Command failed (attempt $attempt/$max_attempts). Retrying in ${delay}s..."
+            echo "命令失败 (尝试 $attempt/$max_attempts)。${delay}秒后重试..."
             sleep "$delay"
             attempt=$((attempt + 1))
             delay=$((delay * 2))
           done
         }
-
-        echo "Updating feeds (primary: git.openwrt.org)"
-        if ! retry 3 ./scripts/feeds update -a; then
-          echo "Primary feed servers failing (likely HTTP 503). Switching feeds to GitHub mirrors and retrying."
-
-          cp -f feeds.conf.default feeds.conf.default.bak
-
+        
+        echo "开始更新 feeds..."
+        
+        # 先尝试官方源
+        if retry 3 ./scripts/feeds update -a; then
+          echo "✓ 官方源更新成功"
+        else
+          echo "官方源失败，切换到 GitHub 镜像..."
+          
+          # 切换到 GitHub 镜像源
           sed -i \
-            -e 's#https://git.openwrt.org/feed/packages.git#https://github.com/openwrt/packages.git#g' \
-            -e 's#https://git.openwrt.org/project/luci.git#https://github.com/openwrt/luci.git#g' \
-            -e 's#https://git.openwrt.org/feed/routing.git#https://github.com/openwrt/routing.git#g' \
-            -e 's#https://git.openwrt.org/feed/telephony.git#https://github.com/openwrt/telephony.git#g' \
+            -e 's|https://git\.openwrt\.org/|https://github.com/openwrt/|g' \
+            -e 's|git://git\.openwrt\.org/|https://github.com/openwrt/|g' \
             feeds.conf.default
-
-          rm -rf feeds/packages feeds/luci feeds/routing feeds/telephony
-          retry 3 ./scripts/feeds update -a
+          
+          # 清除 feeds 目录（保留 .index 文件）
+          find feeds/ -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
+          
+          # 使用镜像源重试
+          echo "使用 GitHub 镜像重试..."
+          if retry 5 ./scripts/feeds update -a; then
+            echo "✓ GitHub 镜像更新成功"
+          else
+            echo "错误: 所有 feed 源均失败"
+            exit 1
+          fi
         fi
-
+        
+        # 安装 feeds
+        echo "安装 feeds..."
         retry 3 ./scripts/feeds install -a
-
+        echo "✓ Feeds 更新安装完成"
+        
+        # 显示 feeds 状态
+        ./scripts/feeds list | head -20
+        echo "... (共 $(./scripts/feeds list | wc -l) 个包)"
+    
     - name: Apply config
       run: |
         cd openwrt
-        cp ../config/tr3000-v1.config .config
+        echo "应用配置文件..."
+        
+        # 检查配置文件是否存在
+        if [ ! -f "../config-repo/config/tr3000-v1.config" ]; then
+          echo "错误: 配置文件未找到: ../config-repo/config/tr3000-v1.config"
+          exit 1
+        fi
+        
+        cp "../config-repo/config/tr3000-v1.config" .config
         make defconfig
-
+        
+        # 验证配置
+        echo "当前配置摘要:"
+        echo "目标: $(grep '^CONFIG_TARGET_[^=]*=y' .config | head -5)"
+        echo "架构: $(grep '^CONFIG_TARGET_ARCH_PACKAGES' .config)"
+        echo "启用的包数量: $(grep -c '^CONFIG_PACKAGE_' .config)"
+    
     - name: Download sources
       run: |
         cd openwrt
-        make download -j$(nproc)
-
+        echo "下载源代码..."
+        
+        # 检查网络连接
+        if ! curl -s --connect-timeout 10 https://github.com > /dev/null; then
+          echo "警告: 网络连接可能不稳定"
+        fi
+        
+        # 下载源码，带重试
+        retry_download() {
+          local attempt=1
+          while [ $attempt -le 3 ]; do
+            if make download -j$(nproc) 2>&1 | tee download.log; then
+              echo "✓ 源代码下载成功"
+              return 0
+            fi
+            echo "下载失败，尝试 $attempt/3..."
+            attempt=$((attempt + 1))
+            sleep 30
+          done
+          return 1
+        }
+        
+        retry_download
+        
+        # 检查下载是否完整
+        if [ -f "scripts/download.pl" ]; then
+          ./scripts/download.pl check
+        fi
+    
     - name: Build firmware
       run: |
         cd openwrt
-        make -j$(nproc)
-
+        echo "开始编译固件..."
+        echo "开始时间: $(date)"
+        
+        # 记录构建信息
+        echo "构建环境信息:"
+        echo "- CPU: $(nproc) 核心"
+        echo "- 内存: $(free -h | awk '/^Mem:/ {print $2}')"
+        echo "- 磁盘空间:"
+        df -h .
+        
+        # 主构建过程
+        BUILD_LOG="build.log"
+        if ! make -j$(($(nproc) + 1)) V=s 2>&1 | tee "$BUILD_LOG"; then
+          echo "编译失败，尝试单线程调试构建..."
+          DEBUG_LOG="build-debug.log"
+          # 单线程详细输出
+          make -j1 V=sc 2>&1 | tee "$DEBUG_LOG"
+          
+          # 提取错误信息
+          echo "=== 构建失败分析 ==="
+          tail -100 "$DEBUG_LOG" | grep -i "error\|failed\|undefined"
+          
+          # 保存调试日志
+          echo "构建日志已保存: $BUILD_LOG, $DEBUG_LOG"
+          exit 1
+        fi
+        
+        echo "✓ 固件编译成功"
+        echo "结束时间: $(date)"
+        
+        # 计算构建时间
+        echo "构建耗时: $((SECONDS / 60)) 分钟 $((SECONDS % 60)) 秒"
+    
     - name: Collect artifacts
       run: |
+        echo "收集构建产物..."
         mkdir -p output
-        cp openwrt/bin/targets/mediatek/filogic/*sysupgrade*.bin output/
-        cp openwrt/bin/targets/mediatek/filogic/*.manifest output/
-
+        
+        cd openwrt
+        
+        # 查找固件文件
+        FIRMWARE_FILES=()
+        while IFS= read -r file; do
+          FIRMWARE_FILES+=("$file")
+        done < <(find bin/targets/mediatek/filogic/ -name "*sysupgrade*.bin" -o -name "*.manifest" 2>/dev/null || true)
+        
+        if [ ${#FIRMWARE_FILES[@]} -eq 0 ]; then
+          echo "错误: 未找到固件文件"
+          echo "目录内容:"
+          find bin/targets/ -type f 2>/dev/null || ls -la bin/ 2>/dev/null || true
+          exit 1
+        fi
+        
+        # 复制文件
+        for file in "${FIRMWARE_FILES[@]}"; do
+          echo "复制: $file"
+          cp "$file" ../output/
+        done
+        
+        # 添加构建信息
+        echo "生成构建信息..."
+        {
+          echo "构建日期: $(date)"
+          echo "OpenWrt 版本: $OPENWRT_VERSION"
+          echo "GitHub Actions Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          echo "触发事件: $GITHUB_EVENT_NAME"
+          echo "提交: $GITHUB_SHA"
+          echo "内核版本: $(grep '^Linux version' build.log | head -1 || echo '未知')"
+          echo "固件文件:"
+          ls -lh ../output/
+        } > ../output/build-info.txt
+        
+        echo "✓ 产物收集完成"
+        ls -lh ../output/
+    
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: openwrt-24.10.5-tr3000-v1-dts-112m
+        name: openwrt-${{ env.OPENWRT_VERSION }}-tr3000-v1-$(date +%Y%m%d-%H%M%S)
         path: output/*
+        retention-days: 30
+        if-no-files-found: error
+    
+    - name: Upload build logs (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs-${{ env.OPENWRT_VERSION }}-$(date +%Y%m%d-%H%M%S)
+        path: |
+          openwrt/build.log
+          openwrt/build-debug.log
+          openwrt/download.log
+        retention-days: 7
+    
+    - name: Cleanup workspace
+      if: always()
+      run: |
+        echo "清理工作空间..."
+        # 保留必要的产物和日志
+        du -sh openwrt/ 2>/dev/null || true
+        # 可选：移除源码节省空间
+        # if [ "${{ github.event_name }}" != "schedule" ]; then
+        #   rm -rf openwrt/
+        # fi
+        echo "工作流完成"
