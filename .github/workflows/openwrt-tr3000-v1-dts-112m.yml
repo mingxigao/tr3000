@@ -222,9 +222,9 @@ jobs:
         echo "设备配置 (defconfig 后):"
         grep -E '^CONFIG_TARGET_.*_DEVICE_.*=y' .config || true
 
-        # 严格匹配：必须是 cudy_tr3000_v1（非 ubootmod），避免落到默认 abt_asr3000
-        if ! grep -qE '^CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000_v1=y$' .config; then
-          echo "错误: 目标设备未正确选中: 期望 CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000_v1=y"
+        # 严格匹配：必须是 cudy_tr3000-v1（非 ubootmod），避免落到默认 abt_asr3000
+        if ! grep -qF 'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1=y' .config; then
+          echo "错误: 目标设备未正确选中: 期望 CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1=y"
           echo "实际设备选择如下:"
           grep -E '^CONFIG_TARGET_.*_DEVICE_.*=y' .config || true
 
@@ -235,8 +235,8 @@ jobs:
             grep -nE 'cudy_tr3000' tmp/.config-target.in || true
             echo "--- grep abt_asr3000 ---"
             grep -nE 'abt_asr3000' tmp/.config-target.in || true
-            echo "--- grep CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000_v1 ---"
-            grep -nE 'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000_v1' tmp/.config-target.in || true
+            echo "--- grep TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1 ---"
+            grep -nE 'TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1' tmp/.config-target.in || true
           else
             echo "未找到 tmp/.config-target.in (make defconfig 未生成? 或目录结构变更)"
             ls -la tmp || true
