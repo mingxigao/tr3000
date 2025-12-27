@@ -208,6 +208,23 @@ jobs:
         
         cp "../config-repo/config/tr3000-v1.config" .config
         make defconfig
+
+        echo "设备配置 (defconfig 后):"
+        grep -E '^CONFIG_TARGET_.*_DEVICE_.*=y' .config || true
+
+        # 严格匹配：必须是 cudy_tr3000_v1（非 ubootmod），避免落到默认 abt_asr3000
+        if ! grep -qE '^CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000_v1=y$' .config; then
+          echo "错误: 目标设备未正确选中: 期望 CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000_v1=y"
+          echo "实际设备选择如下:"
+          grep -E '^CONFIG_TARGET_.*_DEVICE_.*=y' .config || true
+          exit 1
+        fi
+
+        if grep -qE '^CONFIG_TARGET_.*_DEVICE_.*ubootmod.*=y$' .config; then
+          echo "错误: 检测到 ubootmod 变体被选中，但该工作流期望生成官方同款 sysupgrade.bin。"
+          grep -E '^CONFIG_TARGET_.*_DEVICE_.*ubootmod.*=y$' .config || true
+          exit 1
+        fi
         
         # 验证配置
         echo "当前配置摘要:"
@@ -294,12 +311,35 @@ jobs:
         FIRMWARE_FILES=()
         while IFS= read -r file; do
           FIRMWARE_FILES+=("$file")
-        done < <(find bin/targets/mediatek/filogic/ -name "*sysupgrade*.bin" -o -name "*.manifest" 2>/dev/null || true)
+        done < <(
+          find bin/targets/mediatek/filogic/ -type f \
+            \( \
+              -name "*sysupgrade*.bin" -o \
+              -name "*sysupgrade*.itb" -o \
+              -name "*sysupgrade*.tar" -o \
+              -name "*sysupgrade*.img.gz" -o \
+              -name "*factory*.bin" -o \
+              -name "*factory*.img.gz" -o \
+              -name "*.manifest" -o \
+              -name "*.buildinfo" -o \
+              -name "sha256sums" -o \
+              -name "profiles.json" \
+            \) 2>/dev/null || true
+        )
         
         if [ ${#FIRMWARE_FILES[@]} -eq 0 ]; then
           echo "错误: 未找到固件文件"
           echo "目录内容:"
           find bin/targets/ -type f 2>/dev/null || ls -la bin/ 2>/dev/null || true
+          exit 1
+        fi
+
+        # 期望产物包含官方同款 sysupgrade.bin（而不是仅有 sysupgrade.itb）
+        if ! find bin/targets/mediatek/filogic/ -type f -name "*sysupgrade*.bin" | grep -q .; then
+          echo "错误: 未找到 sysupgrade.bin 产物。"
+          echo "提示: 如果只生成了 sysupgrade.itb，通常是选到了 *-ubootmod 变体或文件系统配置不匹配。"
+          echo "当前目录下的 sysupgrade 相关文件:"
+          find bin/targets/mediatek/filogic/ -type f -name "*sysupgrade*" -maxdepth 2 2>/dev/null || true
           exit 1
         fi
         
@@ -324,11 +364,25 @@ jobs:
         
         echo "✓ 产物收集完成"
         ls -lh ../output/
+
+    - name: Prepare artifact info
+      run: |
+        set -euo pipefail
+        TS="$(date +%Y%m%d-%H%M%S)"
+
+        # 生成可追踪且真正动态的 artifact 名称（避免 $(date ...) 被当作字面量）
+        echo "ARTIFACT_NAME=openwrt-${OPENWRT_VERSION}-tr3000-v1-${GITHUB_RUN_ID}-${TS}" >> "$GITHUB_ENV"
+        echo "LOGS_ARTIFACT_NAME=build-logs-${OPENWRT_VERSION}-${GITHUB_RUN_ID}-${TS}" >> "$GITHUB_ENV"
+
+        echo "即将上传的产物清单:"
+        ls -lh output || true
+        echo "文件数量: $(find output -maxdepth 1 -type f | wc -l)"
+        echo "Artifact name: openwrt-${OPENWRT_VERSION}-tr3000-v1-${GITHUB_RUN_ID}-${TS}"
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: openwrt-${{ env.OPENWRT_VERSION }}-tr3000-v1-$(date +%Y%m%d-%H%M%S)
+        name: ${{ env.ARTIFACT_NAME }}
         path: output/*
         retention-days: 30
         if-no-files-found: error
@@ -337,7 +391,7 @@ jobs:
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: build-logs-${{ env.OPENWRT_VERSION }}-$(date +%Y%m%d-%H%M%S)
+        name: ${{ env.LOGS_ARTIFACT_NAME }}
         path: |
           openwrt/build.log
           openwrt/build-debug.log
