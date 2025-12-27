@@ -39,8 +39,8 @@ jobs:
         cd openwrt
 
         DTS_FILE="target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1.dts"
-        OLD_LINE='reg = <0x0580000 0x4000000>;' 
-        NEW_LINE='reg = <0x0580000 0x7000000>;' 
+        OLD_LINE='reg = <0x5c0000 0x4000000>;'
+        NEW_LINE='reg = reg = <0x5c0000 0x7000000>;'
 
         test -f "$DTS_FILE"
 
