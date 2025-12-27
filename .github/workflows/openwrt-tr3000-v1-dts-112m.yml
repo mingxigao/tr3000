@@ -206,7 +206,17 @@ jobs:
           exit 1
         fi
         
+        echo "配置文件路径: ../config-repo/config/tr3000-v1.config"
+        echo "配置文件哈希:"
+        sha256sum "../config-repo/config/tr3000-v1.config" || true
+        echo "配置文件中的 TARGET/DEVICE 行:"
+        grep -nE '^CONFIG_TARGET_.*(=y|=m|=".*")$' "../config-repo/config/tr3000-v1.config" || true
+
         cp "../config-repo/config/tr3000-v1.config" .config
+
+        echo "设备配置 (拷贝 config 后, defconfig 前):"
+        grep -E '^CONFIG_TARGET_.*_DEVICE_.*=y' .config || true
+
         make defconfig
 
         echo "设备配置 (defconfig 后):"
@@ -217,6 +227,20 @@ jobs:
           echo "错误: 目标设备未正确选中: 期望 CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000_v1=y"
           echo "实际设备选择如下:"
           grep -E '^CONFIG_TARGET_.*_DEVICE_.*=y' .config || true
+
+          echo ""
+          echo "调试: 期望的 Kconfig 条目是否存在 (tmp/.config-target.in)?"
+          if [ -f tmp/.config-target.in ]; then
+            echo "--- grep cudy_tr3000 ---"
+            grep -nE 'cudy_tr3000' tmp/.config-target.in || true
+            echo "--- grep abt_asr3000 ---"
+            grep -nE 'abt_asr3000' tmp/.config-target.in || true
+            echo "--- grep CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000_v1 ---"
+            grep -nE 'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000_v1' tmp/.config-target.in || true
+          else
+            echo "未找到 tmp/.config-target.in (make defconfig 未生成? 或目录结构变更)"
+            ls -la tmp || true
+          fi
           exit 1
         fi
 
