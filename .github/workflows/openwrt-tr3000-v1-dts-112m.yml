@@ -611,18 +611,6 @@ jobs:
         path: .build-markers/${{ env.OPENWRT_VERSION }}
         key: openwrt-tr3000-v1-built-${{ env.OPENWRT_VERSION }}
 
-  skip:
-    name: Skip (already built: ${{ needs.precheck.outputs.openwrt_version }})
-    needs: precheck
-    if: needs.precheck.outputs.should_build != 'true'
-    runs-on: ubuntu-22.04
-    steps:
-    - name: Skip build (no new stable version)
-      run: |
-        echo "No new upstream stable version; skipping build."
-        echo "Selected version: ${{ needs.precheck.outputs.openwrt_version }}"
-        echo "Reason: ${{ needs.precheck.outputs.reason }}"
-    
     - name: Collect artifacts
       run: |
         echo "收集构建产物..."
@@ -732,3 +720,15 @@ jobs:
         #   rm -rf openwrt/
         # fi
         echo "工作流完成"
+
+  skip:
+    name: "Skip (already built: ${{ needs.precheck.outputs.openwrt_version }})"
+    needs: precheck
+    if: needs.precheck.outputs.should_build != 'true'
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Skip build (no new stable version)
+      run: |
+        echo "No new upstream stable version; skipping build."
+        echo "Selected version: ${{ needs.precheck.outputs.openwrt_version }}"
+        echo "Reason: ${{ needs.precheck.outputs.reason }}"
