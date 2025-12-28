@@ -1,4 +1,11 @@
-name: OpenWrt 24.10.5 – TR3000 v1 DTS 112M UBI
+name: OpenWrt – TR3000 v1 DTS 112M UBI
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('TR3000 v1 build: {0}', github.event.inputs.openwrt_version)
+      || (github.event_name == 'schedule'
+          && 'TR3000 v1 build: latest stable (auto-detect)'
+          || 'TR3000 v1 build') }}
 
 on:
   workflow_dispatch:
@@ -19,13 +26,113 @@ on:
     - cron: '0 2 * * 0'
 
 jobs:
+  precheck:
+    runs-on: ubuntu-22.04
+    outputs:
+      openwrt_version: ${{ steps.out.outputs.openwrt_version }}
+      should_build: ${{ steps.out.outputs.should_build }}
+      reason: ${{ steps.out.outputs.reason }}
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Determine OpenWrt version and decide whether to build
+      id: setvars
+      env:
+        DEFAULT_VERSION: v24.10.5
+        REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.openwrt_version || '' }}
+      run: |
+        set -euo pipefail
+
+        echo "Event: $GITHUB_EVENT_NAME"
+
+        VERSION=""
+        REASON=""
+
+        if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ -n "${REQUESTED_VERSION}" ]; then
+          VERSION="${REQUESTED_VERSION}"
+          REASON="workflow_dispatch: requested ${VERSION}"
+        elif [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+          echo "Checking upstream tags for latest stable version..."
+          VERSION=$(git ls-remote --tags --refs https://github.com/openwrt/openwrt.git 'v*' \
+            | awk '{print $2}' \
+            | sed 's|refs/tags/||' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V \
+            | tail -n 1 || true)
+          if [ -z "$VERSION" ]; then
+            VERSION="${DEFAULT_VERSION}"
+            REASON="schedule: failed to detect latest stable tag; fallback ${VERSION}"
+          else
+            REASON="schedule: latest stable tag is ${VERSION}"
+          fi
+        else
+          VERSION="${DEFAULT_VERSION}"
+          REASON="${GITHUB_EVENT_NAME}: default ${VERSION}"
+        fi
+
+        echo "Selected OpenWrt version: ${VERSION}"
+        echo "Reason: ${REASON}"
+
+        # For scheduled runs: skip build if this version was already built.
+        SHOULD_BUILD="true"
+        if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+          MARKER_DIR=".build-markers/${VERSION}"
+          mkdir -p "$MARKER_DIR"
+          if [ -f "${MARKER_DIR}/built.txt" ]; then
+            echo "Marker already present in workspace (unexpected)."
+          fi
+          echo "marker_dir=${MARKER_DIR}" >> "$GITHUB_OUTPUT"
+        fi
+
+        echo "openwrt_version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "reason=${REASON}" >> "$GITHUB_OUTPUT"
+        echo "should_build=${SHOULD_BUILD}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore build marker cache (schedule only)
+      if: github.event_name == 'schedule'
+      id: marker
+      uses: actions/cache@v4
+      with:
+        path: .build-markers/${{ steps.setvars.outputs.openwrt_version }}
+        key: openwrt-tr3000-v1-built-${{ steps.setvars.outputs.openwrt_version }}
+
+    - name: Finalize decision (schedule only)
+      if: github.event_name == 'schedule'
+      id: finalize
+      run: |
+        set -euo pipefail
+        if [ "${{ steps.marker.outputs.cache-hit }}" = "true" ]; then
+          echo "Cache marker hit: already built ${{ steps.setvars.outputs.openwrt_version }}"
+          echo "should_build=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "No marker cache: will build ${{ steps.setvars.outputs.openwrt_version }}"
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Publish final outputs
+      id: out
+      run: |
+        set -euo pipefail
+        # Default should_build=true (non-schedule); for schedule, override from finalize.
+        SHOULD_BUILD="${{ steps.setvars.outputs.should_build }}"
+        if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+          SHOULD_BUILD="${{ steps.finalize.outputs.should_build || 'true' }}"
+        fi
+        echo "openwrt_version=${{ steps.setvars.outputs.openwrt_version }}" >> "$GITHUB_OUTPUT"
+        echo "should_build=${SHOULD_BUILD}" >> "$GITHUB_OUTPUT"
+        echo "reason=${{ steps.setvars.outputs.reason }}" >> "$GITHUB_OUTPUT"
+
   build:
+    name: Build firmware (${{ needs.precheck.outputs.openwrt_version }})
+    needs: precheck
+    if: needs.precheck.outputs.should_build == 'true'
     timeout-minutes: 360  # 6小时超时
     runs-on: ubuntu-22.04
     env:
-      OPENWRT_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.openwrt_version || 'v24.10.5' }}
+      OPENWRT_VERSION: ${{ needs.precheck.outputs.openwrt_version }}
       CLEAN_BUILD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.clean_build || false }}
-    
+
     steps:
     - name: Checkout repo
       uses: actions/checkout@v4
@@ -219,6 +326,77 @@ jobs:
 
         make defconfig
 
+        echo ""
+        echo "=== 严格模式校验: defconfig 后必须保留的配置项 ==="
+        REQUIRED_CFG=(
+          CONFIG_PACKAGE_kmod-nft-tproxy
+          CONFIG_PACKAGE_kmod-nft-socket
+          CONFIG_PACKAGE_block-mount
+          CONFIG_PACKAGE_luci-app-mount
+          CONFIG_PACKAGE_kmod-usb2
+          CONFIG_PACKAGE_kmod-usb3
+          CONFIG_PACKAGE_kmod-usb-storage
+          CONFIG_PACKAGE_kmod-usb-storage-uas
+          CONFIG_PACKAGE_kmod-scsi-core
+          CONFIG_PACKAGE_kmod-scsi-generic
+          CONFIG_PACKAGE_kmod-fs-ext4
+          CONFIG_PACKAGE_e2fsprogs
+          CONFIG_PACKAGE_kmod-fs-vfat
+          CONFIG_PACKAGE_kmod-nls-cp437
+          CONFIG_PACKAGE_kmod-nls-iso8859-1
+          CONFIG_PACKAGE_kmod-nls-utf8
+          CONFIG_PACKAGE_kmod-fs-exfat
+          CONFIG_PACKAGE_exfatprogs
+          CONFIG_PACKAGE_kmod-fs-ntfs3
+        )
+
+        MISSING=0
+        for k in "${REQUIRED_CFG[@]}"; do
+          if ! grep -qE "^${k}=y$" .config; then
+            echo "✗ 缺失或未内置: ${k} (期望: ${k}=y)"
+            MISSING=1
+          fi
+        done
+        if [ "$MISSING" -ne 0 ]; then
+          echo ""
+          echo "错误: 严格模式校验失败：defconfig 后配置项未按预期保留。"
+          echo "提示: 包名可能写错/版本不包含/依赖不满足，或被 Kconfig 自动降级。"
+          echo ""
+          echo "=== 诊断信息: .config 中的实际值 ==="
+          for k in "${REQUIRED_CFG[@]}"; do
+            if grep -qE "^${k}=" .config; then
+              grep -E "^${k}=" .config || true
+            else
+              echo "${k} is absent from .config"
+            fi
+          done
+
+          echo ""
+          echo "=== 诊断信息: Kconfig 符号是否存在 (tmp/.config-package.in) ==="
+          if [ -f tmp/.config-package.in ]; then
+            for k in "${REQUIRED_CFG[@]}"; do
+              sym="${k#CONFIG_}"
+              if grep -qE "^config ${sym}$" tmp/.config-package.in; then
+                echo "✓ present: ${k} (config ${sym})"
+              else
+                echo "✗ missing: ${k} (config ${sym})  -> 可能是包在该版本/feeds 中不存在或未正确安装 feeds"
+              fi
+            done
+          else
+            echo "未找到 tmp/.config-package.in (feeds 未生成/目录结构变化/defconfig 前置步骤异常)"
+          fi
+
+          echo ""
+          echo "=== 诊断信息: diffconfig (defconfig 后与默认差异) ==="
+          if [ -x ./scripts/diffconfig.sh ]; then
+            ./scripts/diffconfig.sh | grep -E '^(CONFIG_PACKAGE_(kmod-nft-tproxy|kmod-nft-socket|block-mount|luci-app-mount|kmod-usb2|kmod-usb3|kmod-usb-storage|kmod-usb-storage-uas|kmod-scsi-core|kmod-scsi-generic|kmod-fs-ext4|e2fsprogs|kmod-fs-vfat|kmod-nls-cp437|kmod-nls-iso8859-1|kmod-nls-utf8|kmod-fs-exfat|exfatprogs|kmod-fs-ntfs3))' || true
+          else
+            echo "scripts/diffconfig.sh 不存在或不可执行"
+          fi
+          exit 1
+        fi
+        echo "✓ 严格模式校验通过: defconfig 后关键包均为 =y"
+
         echo "设备配置 (defconfig 后):"
         grep -E '^CONFIG_TARGET_.*_DEVICE_.*=y' .config || true
 
@@ -323,6 +501,127 @@ jobs:
         
         # 计算构建时间
         echo "构建耗时: $((SECONDS / 60)) 分钟 $((SECONDS % 60)) 秒"
+
+    - name: Validate image content and report size (strict)
+      run: |
+        set -euo pipefail
+        cd openwrt
+
+        echo "=== 严格模式校验: 镜像内容 (manifest) ==="
+        MANIFEST=""
+        MANIFEST=$(ls -1 bin/targets/mediatek/filogic/*.manifest 2>/dev/null | head -n 1 || true)
+        if [ -z "$MANIFEST" ] || [ ! -f "$MANIFEST" ]; then
+          echo "错误: 未找到 manifest 文件: bin/targets/mediatek/filogic/*.manifest"
+          find bin/targets/mediatek/filogic/ -maxdepth 1 -type f -print || true
+          exit 1
+        fi
+        echo "使用 manifest: $MANIFEST"
+
+        REQUIRED_PKGS=(
+          kmod-nft-tproxy
+          kmod-nft-socket
+          block-mount
+          luci-app-mount
+          kmod-usb2
+          kmod-usb3
+          kmod-usb-storage
+          kmod-usb-storage-uas
+          kmod-scsi-core
+          kmod-scsi-generic
+          kmod-fs-ext4
+          e2fsprogs
+          kmod-fs-vfat
+          kmod-nls-cp437
+          kmod-nls-iso8859-1
+          kmod-nls-utf8
+          kmod-fs-exfat
+          exfatprogs
+          kmod-fs-ntfs3
+        )
+
+        MISSING=0
+        for p in "${REQUIRED_PKGS[@]}"; do
+          if ! grep -qE "^${p} " "$MANIFEST"; then
+            echo "✗ 镜像未包含: ${p} (manifest 中未找到)"
+            MISSING=1
+          fi
+        done
+        if [ "$MISSING" -ne 0 ]; then
+          echo ""
+          echo "错误: 严格模式校验失败：镜像 manifest 未包含全部必需包。"
+          echo "调试: 以下是 manifest 中相关条目(若有):"
+          grep -E '^(kmod-nft-tproxy|kmod-nft-socket|block-mount|luci-app-mount|kmod-usb|kmod-scsi|kmod-fs-|kmod-nls-|e2fsprogs|exfatprogs) ' "$MANIFEST" || true
+          exit 1
+        fi
+        echo "✓ 严格模式校验通过: manifest 包含全部必需包"
+
+        echo ""
+        echo "=== 体积报告: 固件与 rootfs ==="
+        ls -lh bin/targets/mediatek/filogic/ || true
+        SYSUP=""
+        SYSUP=$(ls -1 bin/targets/mediatek/filogic/*sysupgrade*.bin 2>/dev/null | head -n 1 || true)
+        if [ -n "$SYSUP" ] && [ -f "$SYSUP" ]; then
+          echo "sysupgrade.bin: $(ls -lh "$SYSUP")"
+        else
+          echo "未找到 sysupgrade.bin (用于体积参考)"
+        fi
+
+        ROOTFS=""
+        ROOTFS=$(ls -1 bin/targets/mediatek/filogic/*rootfs*.squashfs 2>/dev/null | head -n 1 || true)
+        if [ -n "$ROOTFS" ] && [ -f "$ROOTFS" ]; then
+          echo "rootfs.squashfs: $(ls -lh "$ROOTFS")"
+        else
+          echo "未找到 rootfs.squashfs (不同 target 可能不输出该文件)"
+        fi
+
+        echo ""
+        echo "=== 体积估算: 相关包 ipk 文件大小 (压缩包，仅供估算) ==="
+        total=0
+        for p in "${REQUIRED_PKGS[@]}"; do
+          ipk=$(find bin -type f -name "${p}_*.ipk" 2>/dev/null | head -n 1 || true)
+          if [ -n "$ipk" ] && [ -f "$ipk" ]; then
+            sz=$(stat -c '%s' "$ipk")
+            total=$((total + sz))
+            echo "$(printf '%-22s' "$p"): $(numfmt --to=iec --suffix=B "$sz")  ($ipk)"
+          else
+            echo "$(printf '%-22s' "$p"): (未找到对应 ipk，可能被内联到 target packages 或命名不同)"
+          fi
+        done
+        echo "ipk 体积合计(上限估算): $(numfmt --to=iec --suffix=B "$total")"
+
+    - name: Write and save build marker (schedule only)
+      if: github.event_name == 'schedule'
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}"
+        MARKER_DIR=".build-markers/${OPENWRT_VERSION}"
+        mkdir -p "$MARKER_DIR"
+        {
+          echo "version=${OPENWRT_VERSION}"
+          echo "run_id=${GITHUB_RUN_ID}"
+          echo "sha=${GITHUB_SHA}"
+          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        } > "${MARKER_DIR}/built.txt"
+        cat "${MARKER_DIR}/built.txt"
+
+    - name: Save build marker cache (schedule only)
+      if: github.event_name == 'schedule'
+      uses: actions/cache@v4
+      with:
+        path: .build-markers/${{ env.OPENWRT_VERSION }}
+        key: openwrt-tr3000-v1-built-${{ env.OPENWRT_VERSION }}
+
+  skip:
+    name: Skip (already built: ${{ needs.precheck.outputs.openwrt_version }})
+    needs: precheck
+    if: needs.precheck.outputs.should_build != 'true'
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Skip build (no new stable version)
+      run: |
+        echo "No new upstream stable version; skipping build."
+        echo "Selected version: ${{ needs.precheck.outputs.openwrt_version }}"
+        echo "Reason: ${{ needs.precheck.outputs.reason }}"
     
     - name: Collect artifacts
       run: |
