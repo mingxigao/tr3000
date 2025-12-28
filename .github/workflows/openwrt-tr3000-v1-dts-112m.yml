@@ -332,7 +332,6 @@ jobs:
           CONFIG_PACKAGE_kmod-nft-tproxy
           CONFIG_PACKAGE_kmod-nft-socket
           CONFIG_PACKAGE_block-mount
-          CONFIG_PACKAGE_luci-app-mount
           CONFIG_PACKAGE_kmod-usb2
           CONFIG_PACKAGE_kmod-usb3
           CONFIG_PACKAGE_kmod-usb-storage
@@ -340,14 +339,19 @@ jobs:
           CONFIG_PACKAGE_kmod-scsi-core
           CONFIG_PACKAGE_kmod-scsi-generic
           CONFIG_PACKAGE_kmod-fs-ext4
-          CONFIG_PACKAGE_e2fsprogs
           CONFIG_PACKAGE_kmod-fs-vfat
           CONFIG_PACKAGE_kmod-nls-cp437
           CONFIG_PACKAGE_kmod-nls-iso8859-1
           CONFIG_PACKAGE_kmod-nls-utf8
           CONFIG_PACKAGE_kmod-fs-exfat
-          CONFIG_PACKAGE_exfatprogs
           CONFIG_PACKAGE_kmod-fs-ntfs3
+        )
+
+        # 可选项：缺失不致命（仅提示），用于增强体验/工具
+        OPTIONAL_CFG=(
+          CONFIG_PACKAGE_luci-app-mount
+          CONFIG_PACKAGE_e2fsprogs
+          CONFIG_PACKAGE_exfatprogs
         )
 
         MISSING=0
@@ -357,13 +361,19 @@ jobs:
             MISSING=1
           fi
         done
+
+        for k in "${OPTIONAL_CFG[@]}"; do
+          if ! grep -qE "^${k}=y$" .config; then
+            echo "! 可选项未内置: ${k} (期望: ${k}=y；但缺失不会阻断构建)"
+          fi
+        done
         if [ "$MISSING" -ne 0 ]; then
           echo ""
           echo "错误: 严格模式校验失败：defconfig 后配置项未按预期保留。"
           echo "提示: 包名可能写错/版本不包含/依赖不满足，或被 Kconfig 自动降级。"
           echo ""
           echo "=== 诊断信息: .config 中的实际值 ==="
-          for k in "${REQUIRED_CFG[@]}"; do
+          for k in "${REQUIRED_CFG[@]}" "${OPTIONAL_CFG[@]}"; do
             if grep -qE "^${k}=" .config; then
               grep -E "^${k}=" .config || true
             else
@@ -374,9 +384,10 @@ jobs:
           echo ""
           echo "=== 诊断信息: Kconfig 符号是否存在 (tmp/.config-package.in) ==="
           if [ -f tmp/.config-package.in ]; then
-            for k in "${REQUIRED_CFG[@]}"; do
+            for k in "${REQUIRED_CFG[@]}" "${OPTIONAL_CFG[@]}"; do
               sym="${k#CONFIG_}"
-              if grep -qE "^config ${sym}$" tmp/.config-package.in; then
+              # tmp/.config-package.in 可能包含额外空格或 CRLF，避免使用严格行尾匹配
+              if grep -qE "^config[[:space:]]+${sym}([[:space:]]|\r|$)" tmp/.config-package.in; then
                 echo "✓ present: ${k} (config ${sym})"
               else
                 echo "✗ missing: ${k} (config ${sym})  -> 可能是包在该版本/feeds 中不存在或未正确安装 feeds"
@@ -521,7 +532,6 @@ jobs:
           kmod-nft-tproxy
           kmod-nft-socket
           block-mount
-          luci-app-mount
           kmod-usb2
           kmod-usb3
           kmod-usb-storage
@@ -529,14 +539,18 @@ jobs:
           kmod-scsi-core
           kmod-scsi-generic
           kmod-fs-ext4
-          e2fsprogs
           kmod-fs-vfat
           kmod-nls-cp437
           kmod-nls-iso8859-1
           kmod-nls-utf8
           kmod-fs-exfat
-          exfatprogs
           kmod-fs-ntfs3
+        )
+
+        OPTIONAL_PKGS=(
+          luci-app-mount
+          e2fsprogs
+          exfatprogs
         )
 
         MISSING=0
@@ -554,6 +568,12 @@ jobs:
           exit 1
         fi
         echo "✓ 严格模式校验通过: manifest 包含全部必需包"
+
+        for p in "${OPTIONAL_PKGS[@]}"; do
+          if ! grep -qE "^${p} " "$MANIFEST"; then
+            echo "! 可选包未进镜像: ${p} (不阻断构建)"
+          fi
+        done
 
         echo ""
         echo "=== 体积报告: 固件与 rootfs ==="
@@ -577,7 +597,7 @@ jobs:
         echo ""
         echo "=== 体积估算: 相关包 ipk 文件大小 (压缩包，仅供估算) ==="
         total=0
-        for p in "${REQUIRED_PKGS[@]}"; do
+        for p in "${REQUIRED_PKGS[@]}" "${OPTIONAL_PKGS[@]}"; do
           ipk=$(find bin -type f -name "${p}_*.ipk" 2>/dev/null | head -n 1 || true)
           if [ -n "$ipk" ] && [ -f "$ipk" ]; then
             sz=$(stat -c '%s' "$ipk")
