@@ -373,6 +373,11 @@ jobs:
           # Samba 网盘共享（SMB3 加密）
           CONFIG_PACKAGE_samba4-server
           CONFIG_PACKAGE_luci-app-samba4
+
+          # 安全远程访问（推荐）：WireGuard VPN
+          CONFIG_PACKAGE_kmod-wireguard
+          CONFIG_PACKAGE_wireguard-tools
+          CONFIG_PACKAGE_luci-proto-wireguard
         )
 
         # 可选项：缺失不致命（仅提示），用于增强体验/工具
@@ -445,7 +450,7 @@ jobs:
           echo ""
           echo "=== 诊断信息: diffconfig (defconfig 后与默认差异) ==="
           if [ -x ./scripts/diffconfig.sh ]; then
-            ./scripts/diffconfig.sh | grep -E '^(CONFIG_PACKAGE_(kmod-nft-tproxy|kmod-nft-socket|block-mount|luci-app-mount|kmod-usb2|kmod-usb3|kmod-usb-storage|kmod-usb-storage-uas|kmod-scsi-core|kmod-scsi-generic|kmod-usb-net|kmod-usb-net-rndis|kmod-usb-net-ipheth|kmod-usb-net-cdc-ether|kmod-usb-net-cdc-ncm|kmod-usb-wdm|kmod-usb-net-qmi-wwan|uqmi|luci-proto-qmi|kmod-usb-net-cdc-mbim|umbim|luci-proto-mbim|kmod-usb-serial|kmod-usb-serial-wwan|kmod-usb-serial-option|kmod-usb-serial-qcserial|kmod-usb-serial-sierra|ppp|chat|kmod-fs-ext4|e2fsprogs|kmod-fs-vfat|kmod-nls-cp437|kmod-nls-iso8859-1|kmod-nls-utf8|kmod-fs-exfat|exfatprogs|kmod-fs-ntfs3))' || true
+            ./scripts/diffconfig.sh | grep -E '^(CONFIG_PACKAGE_(kmod-nft-tproxy|kmod-nft-socket|block-mount|luci-app-mount|kmod-usb2|kmod-usb3|kmod-usb-storage|kmod-usb-storage-uas|kmod-scsi-core|kmod-scsi-generic|kmod-usb-net|kmod-usb-net-rndis|kmod-usb-net-ipheth|kmod-usb-net-cdc-ether|kmod-usb-net-cdc-ncm|kmod-usb-wdm|kmod-usb-net-qmi-wwan|uqmi|luci-proto-qmi|kmod-usb-net-cdc-mbim|umbim|luci-proto-mbim|kmod-usb-serial|kmod-usb-serial-wwan|kmod-usb-serial-option|kmod-usb-serial-qcserial|kmod-usb-serial-sierra|ppp|chat|kmod-fs-ext4|e2fsprogs|kmod-fs-vfat|kmod-nls-cp437|kmod-nls-iso8859-1|kmod-nls-utf8|kmod-fs-exfat|exfatprogs|kmod-fs-ntfs3|samba4-server|luci-app-samba4|wsdd2|shadow-useradd|kmod-wireguard|wireguard-tools|luci-proto-wireguard))' || true
           else
             echo "scripts/diffconfig.sh 不存在或不可执行"
           fi
@@ -609,6 +614,11 @@ jobs:
           # Samba 网盘共享（SMB3 加密）
           samba4-server
           luci-app-samba4
+
+          # 安全远程访问（推荐）：WireGuard VPN
+          kmod-wireguard
+          wireguard-tools
+          luci-proto-wireguard
         )
 
         OPTIONAL_PKGS=(
