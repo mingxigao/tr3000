@@ -1,0 +1,39 @@
+#!/bin/sh
+set -e
+
+# Enforce SMB encryption/signing defaults for Samba4 on OpenWrt.
+# This runs once at first boot.
+
+if ! command -v uci >/dev/null 2>&1; then
+  exit 0
+fi
+
+# Only apply if samba4 UCI config exists (package installed)
+if [ ! -f /etc/config/samba4 ]; then
+  exit 0
+fi
+
+# Ensure a global samba section exists
+if ! uci -q get samba4.@samba[0] >/dev/null; then
+  uci -q add samba4 samba >/dev/null
+fi
+
+EXTRA_CFG=$(cat <<'EOF'
+# Security hardening (SMB3 encryption)
+# Note: clients must support SMB3 encryption, otherwise they won't connect.
+server min protocol = SMB3_11
+client min protocol = SMB3_11
+smb encrypt = required
+server signing = mandatory
+ntlm auth = disabled
+EOF
+)
+
+uci -q batch <<EOF
+set samba4.@samba[0].interface='lan'
+set samba4.@samba[0].charset='UTF-8'
+set samba4.@samba[0].extra_config='$EXTRA_CFG'
+commit samba4
+EOF
+
+exit 0
