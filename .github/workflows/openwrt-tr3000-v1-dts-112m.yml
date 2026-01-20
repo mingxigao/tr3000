@@ -346,6 +346,13 @@ jobs:
           CONFIG_PACKAGE_kmod-usb-net-cdc-ether
           CONFIG_PACKAGE_kmod-usb-net-cdc-ncm
 
+          # USB 4G/5G 上网卡/随身 WiFi (核心: QMI/MBIM)
+          CONFIG_PACKAGE_kmod-usb-wdm
+          CONFIG_PACKAGE_kmod-usb-net-qmi-wwan
+          CONFIG_PACKAGE_uqmi
+          CONFIG_PACKAGE_kmod-usb-net-cdc-mbim
+          CONFIG_PACKAGE_umbim
+
           CONFIG_PACKAGE_kmod-fs-ext4
           CONFIG_PACKAGE_kmod-fs-vfat
           CONFIG_PACKAGE_kmod-nls-cp437
@@ -360,6 +367,19 @@ jobs:
           CONFIG_PACKAGE_luci-app-mount
           CONFIG_PACKAGE_e2fsprogs
           CONFIG_PACKAGE_exfatprogs
+
+          # USB 4G/5G 体验增强 (LuCI 协议支持)
+          CONFIG_PACKAGE_luci-proto-qmi
+          CONFIG_PACKAGE_luci-proto-mbim
+
+          # 兼容少数老式拨号棒 (PPP over USB-Serial)
+          CONFIG_PACKAGE_kmod-usb-serial
+          CONFIG_PACKAGE_kmod-usb-serial-wwan
+          CONFIG_PACKAGE_kmod-usb-serial-option
+          CONFIG_PACKAGE_kmod-usb-serial-qcserial
+          CONFIG_PACKAGE_kmod-usb-serial-sierra
+          CONFIG_PACKAGE_ppp
+          CONFIG_PACKAGE_chat
         )
 
         MISSING=0
@@ -408,7 +428,7 @@ jobs:
           echo ""
           echo "=== 诊断信息: diffconfig (defconfig 后与默认差异) ==="
           if [ -x ./scripts/diffconfig.sh ]; then
-            ./scripts/diffconfig.sh | grep -E '^(CONFIG_PACKAGE_(kmod-nft-tproxy|kmod-nft-socket|block-mount|luci-app-mount|kmod-usb2|kmod-usb3|kmod-usb-storage|kmod-usb-storage-uas|kmod-scsi-core|kmod-scsi-generic|kmod-usb-net|kmod-usb-net-rndis|kmod-usb-net-ipheth|kmod-usb-net-cdc-ether|kmod-usb-net-cdc-ncm|kmod-fs-ext4|e2fsprogs|kmod-fs-vfat|kmod-nls-cp437|kmod-nls-iso8859-1|kmod-nls-utf8|kmod-fs-exfat|exfatprogs|kmod-fs-ntfs3))' || true
+            ./scripts/diffconfig.sh | grep -E '^(CONFIG_PACKAGE_(kmod-nft-tproxy|kmod-nft-socket|block-mount|luci-app-mount|kmod-usb2|kmod-usb3|kmod-usb-storage|kmod-usb-storage-uas|kmod-scsi-core|kmod-scsi-generic|kmod-usb-net|kmod-usb-net-rndis|kmod-usb-net-ipheth|kmod-usb-net-cdc-ether|kmod-usb-net-cdc-ncm|kmod-usb-wdm|kmod-usb-net-qmi-wwan|uqmi|luci-proto-qmi|kmod-usb-net-cdc-mbim|umbim|luci-proto-mbim|kmod-usb-serial|kmod-usb-serial-wwan|kmod-usb-serial-option|kmod-usb-serial-qcserial|kmod-usb-serial-sierra|ppp|chat|kmod-fs-ext4|e2fsprogs|kmod-fs-vfat|kmod-nls-cp437|kmod-nls-iso8859-1|kmod-nls-utf8|kmod-fs-exfat|exfatprogs|kmod-fs-ntfs3))' || true
           else
             echo "scripts/diffconfig.sh 不存在或不可执行"
           fi
@@ -554,6 +574,13 @@ jobs:
           kmod-usb-net-cdc-ether
           kmod-usb-net-cdc-ncm
 
+          # USB 4G/5G 上网卡/随身 WiFi (核心: QMI/MBIM)
+          kmod-usb-wdm
+          kmod-usb-net-qmi-wwan
+          uqmi
+          kmod-usb-net-cdc-mbim
+          umbim
+
           kmod-fs-ext4
           kmod-fs-vfat
           kmod-nls-cp437
@@ -567,6 +594,19 @@ jobs:
           luci-app-mount
           e2fsprogs
           exfatprogs
+
+          # USB 4G/5G 体验增强 (LuCI 协议支持)
+          luci-proto-qmi
+          luci-proto-mbim
+
+          # 兼容少数老式拨号棒 (PPP over USB-Serial)
+          kmod-usb-serial
+          kmod-usb-serial-wwan
+          kmod-usb-serial-option
+          kmod-usb-serial-qcserial
+          kmod-usb-serial-sierra
+          ppp
+          chat
         )
 
         MISSING=0
