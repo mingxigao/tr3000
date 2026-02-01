@@ -1,0 +1,42 @@
+#!/bin/sh
+set -e
+
+# Ensure opkg feeds include packages + kmods from the matching OpenWrt release.
+# This runs once at first boot.
+#
+# Why: installing kmod-* packages later via opkg requires the openwrt_kmods feed
+# and the feeds must match the firmware's exact release + target + arch.
+
+OPENWRT_RELEASE_FILE="/etc/openwrt_release"
+
+# If the release metadata isn't present, do nothing.
+[ -f "$OPENWRT_RELEASE_FILE" ] || exit 0
+
+# shellcheck disable=SC1091
+. "$OPENWRT_RELEASE_FILE"
+
+# Expect these to be present in /etc/openwrt_release
+# - DISTRIB_RELEASE: e.g. 24.10.5
+# - DISTRIB_TARGET:  e.g. mediatek/filogic
+# - DISTRIB_ARCH:    e.g. aarch64_cortex-a53
+[ -n "${DISTRIB_RELEASE:-}" ] || exit 0
+[ -n "${DISTRIB_TARGET:-}" ] || exit 0
+[ -n "${DISTRIB_ARCH:-}" ] || exit 0
+
+case "${DISTRIB_RELEASE}" in
+	*SNAPSHOT*) BASE_URL="https://downloads.openwrt.org/snapshots" ;;
+	*)         BASE_URL="https://downloads.openwrt.org/releases/${DISTRIB_RELEASE}" ;;
+esac
+TARGET_URL="${BASE_URL}/targets/${DISTRIB_TARGET}"
+PKG_URL="${BASE_URL}/packages/${DISTRIB_ARCH}"
+
+cat > /etc/opkg/distfeeds.conf <<EOF
+src/gz openwrt_core ${PKG_URL}/base
+src/gz openwrt_base ${PKG_URL}/packages
+src/gz openwrt_luci ${PKG_URL}/luci
+src/gz openwrt_routing ${PKG_URL}/routing
+src/gz openwrt_telephony ${PKG_URL}/telephony
+src/gz openwrt_kmods ${TARGET_URL}/kmods
+EOF
+
+exit 0
